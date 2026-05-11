@@ -2,15 +2,13 @@ import io
 import pytest
 from sage.all import QQ, PolynomialRing
 
-from mrdi import save, load, save_file, load_file, reset_global_serializer_state
+from mrdi import save, load, save_file, load_file
 
 
 def roundtrip(obj):
-    reset_global_serializer_state()
     buf = io.StringIO()
     save(buf, obj)
     buf.seek(0)
-    reset_global_serializer_state()
     return load(buf)
 
 
@@ -28,8 +26,7 @@ class TestIdealRoundtrip:
     def test_single_generator(self, R, xy):
         x, y = xy
         I = R.ideal([x**2 - y])
-        I2 = roundtrip(I)
-        assert I2 == I
+        assert roundtrip(I) == I
 
     def test_two_generators(self, R, xy):
         x, y = xy
@@ -38,16 +35,14 @@ class TestIdealRoundtrip:
 
     def test_rational_coefficients(self, R, xy):
         x, y = xy
-        I = R.ideal([QQ(1)/2 * x + QQ(1)/3 * y - 1])
+        I = R.ideal([QQ(1) / 2 * x + QQ(1) / 3 * y - 1])
         assert roundtrip(I) == I
 
     def test_zero_ideal(self, R):
-        I = R.ideal([R.zero()])
-        assert roundtrip(I) == I
+        assert roundtrip(R.ideal([R.zero()])) == R.ideal([R.zero()])
 
     def test_unit_ideal(self, R):
-        I = R.ideal([R.one()])
-        assert roundtrip(I) == I
+        assert roundtrip(R.ideal([R.one()])) == R.ideal([R.one()])
 
     def test_three_generators(self, R, xy):
         x, y = xy
@@ -56,14 +51,11 @@ class TestIdealRoundtrip:
 
     def test_ring_preserved(self, R, xy):
         x, y = xy
-        I = R.ideal([x - y])
-        assert roundtrip(I).ring() == R
+        assert roundtrip(R.ideal([x - y])).ring() == R
 
     def test_file_roundtrip(self, R, xy, tmp_path):
         x, y = xy
         I = R.ideal([x**2 - 1, y - x])
         path = str(tmp_path / "I.mrdi")
-        reset_global_serializer_state()
         save_file(path, I)
-        reset_global_serializer_state()
         assert load_file(path) == I

@@ -2,15 +2,13 @@ import io
 import pytest
 from sage.all import QQ, PolynomialRing
 
-from mrdi import save, load, save_file, load_file, reset_global_serializer_state
+from mrdi import save, load, save_file, load_file
 
 
 def roundtrip(obj):
-    reset_global_serializer_state()
     buf = io.StringIO()
     save(buf, obj)
     buf.seek(0)
-    reset_global_serializer_state()
     return load(buf)
 
 
@@ -43,7 +41,7 @@ class TestPolynomialRoundtrip:
 
     def test_rational_coefficients(self, R, xy):
         x, y = xy
-        p = QQ(1)/2 * x**2 + QQ(3)/4 * y - QQ(1)/6
+        p = QQ(1) / 2 * x**2 + QQ(3) / 4 * y - QQ(1) / 6
         assert roundtrip(p) == p
 
     def test_multivariate(self, R, xy):
@@ -59,14 +57,34 @@ class TestPolynomialRoundtrip:
 
     def test_parent_preserved(self, R, xy):
         x, y = xy
-        p = x + y
-        assert roundtrip(p).parent() == R
+        assert roundtrip(x + y).parent() == R
 
     def test_file_roundtrip(self, R, xy, tmp_path):
         x, y = xy
         p = x**2 - y
         path = str(tmp_path / "p.mrdi")
-        reset_global_serializer_state()
         save_file(path, p)
-        reset_global_serializer_state()
         assert load_file(path) == p
+
+
+class TestUnivariatePoly:
+    def test_zero(self):
+        R = PolynomialRing(QQ, "x")
+        assert roundtrip(R.zero()) == R.zero()
+
+    def test_constant(self):
+        R = PolynomialRing(QQ, "x")
+        p = R(QQ(3) / 2)
+        assert roundtrip(p) == p
+
+    def test_dense(self):
+        R = PolynomialRing(QQ, "x")
+        x = R.gen()
+        p = x**4 - QQ(1) / 2 * x + 7
+        assert roundtrip(p) == p
+
+    def test_parent_preserved(self):
+        R = PolynomialRing(QQ, "x")
+        x = R.gen()
+        p = x**2 + 1
+        assert roundtrip(p).parent() == R
