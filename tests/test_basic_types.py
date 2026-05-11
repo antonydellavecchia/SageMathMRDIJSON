@@ -1,15 +1,7 @@
-import io
 import pytest
 from sage.all import ZZ, QQ
 
-from mrdi import save, load
-
-
-def roundtrip(obj):
-    buf = io.StringIO()
-    save(buf, obj)
-    buf.seek(0)
-    return load(buf)
+from conftest import roundtrip
 
 
 class TestZZRingElem:

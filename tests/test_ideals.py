@@ -1,15 +1,8 @@
-import io
 import pytest
 from sage.all import QQ, PolynomialRing
 
-from mrdi import save, load, save_file, load_file
-
-
-def roundtrip(obj):
-    buf = io.StringIO()
-    save(buf, obj)
-    buf.seek(0)
-    return load(buf)
+from mrdi import save_file, load_file
+from conftest import roundtrip
 
 
 @pytest.fixture

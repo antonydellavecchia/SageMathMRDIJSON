@@ -53,6 +53,15 @@ I2 = load_file("I.mrdi")
 conda run -n mardi-annual pytest tests/ -v
 ```
 
+## Citation
+
+If you use this project, please cite the MRDI format paper:
+
+> Antony Della Vecchia, Michael Joswig, Benjamin Lorenz.
+> **A FAIR File Format for Mathematical Software.**
+> In: *Mathematical Software – ICMS 2024*, Lecture Notes in Computer Science. Springer, 2024.
+> DOI: [10.1007/978-3-031-64529-7_25](https://dl.acm.org/doi/10.1007/978-3-031-64529-7_25)
+
 ## Project layout
 
 ```

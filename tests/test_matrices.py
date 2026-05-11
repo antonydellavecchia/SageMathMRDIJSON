@@ -1,15 +1,11 @@
-import io
+import os
 import pytest
 from sage.all import QQ, MatrixSpace
 
-from mrdi import save, load, save_file, load_file
+from mrdi import save_file, load_file
+from conftest import roundtrip
 
-
-def roundtrip(obj):
-    buf = io.StringIO()
-    save(buf, obj)
-    buf.seek(0)
-    return load(buf)
+EXAMPLES_DIR = os.path.dirname(__file__)
 
 
 class TestMatrixRoundtrip:
@@ -52,3 +48,10 @@ class TestMatrixRoundtrip:
         path = str(tmp_path / "m.mrdi")
         save_file(path, m)
         assert load_file(path) == m
+
+    def test_load_example_file(self):
+        path = os.path.join(EXAMPLES_DIR, "matrix-example.mrdi")
+        m = load_file(path)
+        expected = MatrixSpace(QQ, 2, 2)([[QQ(1, 2), QQ(3, 4)], [QQ(1), QQ(4, 5)]])
+        assert m == expected
+        assert m.parent() == MatrixSpace(QQ, 2, 2)
