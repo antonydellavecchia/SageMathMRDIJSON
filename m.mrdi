@@ -1,0 +1,1 @@
+{"_ns":{"Oscar": ["https://github.com/oscar-system/Oscar.jl", "1.5.0"]},"_type":{"name":"MatElem","params":"5dfb4c45-057b-4be2-9681-f917878a4a3a"},"data":[["1", "2", "3"], ["4", "5", "6"]],"_refs":{"5dfb4c45-057b-4be2-9681-f917878a4a3a":{"_type":{"name":"MatSpace","params":{"_type":"QQField"}},"data":{"nrows":"2","ncols":"3"}}}}
