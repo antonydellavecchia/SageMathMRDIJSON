@@ -3,40 +3,22 @@ import uuid
 import os
 import tempfile
 import shutil
-from typing import Any, Dict, Tuple, Type, Union, List
-from dataclasses import dataclass
-from collections import defaultdict
+from typing import Any
+
 from sage.all import QQ, PolynomialRing, MatrixSpace
 from sage.rings import polynomial
 from sage.matrix import matrix_space, matrix_rational_dense
+from sage.rings.polynomial.multi_polynomial_ideal import MPolynomialIdeal
+from sage.rings.polynomial.multi_polynomial_libsingular import (
+    MPolynomialRing_libsingular,
+    MPolynomial_libsingular,
+)
 
-
-################################################################################
-# Type Serializers (convert type to string)
-def convert_type_to_string(T):
-    return str(T)
-
-################################################################################
-# Serializers
-class OscarSerializer:
-    pass
-
-class JSONSerializer(OscarSerializer):
-    def __init__(self, serialize_refs=True):
-        self.serialize_refs = serialize_refs
-
-class IPCSerializer(OscarSerializer):
-    pass
-
-class MultiFileSerializer(OscarSerializer):
-    def __init__(self, basepath):
-        self.basepath = basepath
-
-class LPSerializer(MultiFileSerializer):
-    pass
+VERSION_NUMBER = (1, 5, 0)
 
 ################################################################################
-# Global (De)Serializer State
+# Global serializer state
+
 class GlobalSerializerState:
     def __init__(self):
         self.obj_to_id = {}
@@ -50,9 +32,9 @@ def reset_global_serializer_state():
 
 ################################################################################
 # SerializerState
+
 class SerializerState:
-    def __init__(self, serializer, io, with_attrs):
-        self.serializer = serializer
+    def __init__(self, io, with_attrs):
         self.new_level_entry = True
         self.refs = []
         self.io = io
@@ -86,7 +68,6 @@ class SerializerState:
         if self.new_level_entry:
             self.new_level_entry = False
 
-
 ################################################################################
 # Serialization helpers
 
@@ -112,6 +93,12 @@ def save_data_basic(s, x, key=None):
     s.begin_node()
     json.dump(str(x), s.io)
 
+def save_data_json(s, data, key=None):
+    if key is not None:
+        s.key = key
+    s.begin_node()
+    s.io.write(json.dumps(data))
+
 def save_as_ref(s, obj):
     ref = global_serializer_state.obj_to_id.get(id(obj))
     if ref is not None:
@@ -124,19 +111,12 @@ def save_as_ref(s, obj):
     s.refs.append(ref)
     return str(ref)
 
-def save_data_json(s: SerializerState, data, key=None):
-    if key is not None:
-        s.key = key
-        s.begin_node()
-
-    s.io.write(json.dumps(data))
-
-def serializer_open(io, serializer, with_attrs):
-    return SerializerState(serializer, io, with_attrs)
-
+def serializer_open(io, with_attrs):
+    return SerializerState(io, with_attrs)
 
 ################################################################################
 # Deserialization
+
 class DeserializerState:
     def __init__(self, obj, refs=None):
         self.obj = obj
@@ -149,8 +129,7 @@ def deserializer_open(io):
     return DeserializerState(obj, refs)
 
 def load_ref(s):
-    id_str = s.obj
-    uid = uuid.UUID(id_str)
+    uid = uuid.UUID(s.obj)
     if uid in global_serializer_state.id_to_obj:
         return global_serializer_state.id_to_obj[uid]
     obj = s.obj
@@ -162,36 +141,45 @@ def load_ref(s):
     return ref_obj
 
 ################################################################################
-# Version info
-
-VERSION_NUMBER = (1, 5, 0)  # Example placeholder for Oscar’s version tuple
+# Namespace
 
 def get_oscar_serialization_version():
+    v = VERSION_NUMBER
     return {
         "Oscar": [
             "https://github.com/oscar-system/Oscar.jl",
-            f"{VERSION_NUMBER[0]}.{VERSION_NUMBER[1]}.{VERSION_NUMBER[2]}"
+            f"{v[0]}.{v[1]}.{v[2]}",
         ]
     }
 
+################################################################################
+# Type params
+
 def save_type_params(serializer, obj):
     def save_body():
-        if isinstance(obj,
-                      polynomial.multi_polynomial_libsingular.MPolynomialRing_libsingular):
+        if isinstance(obj, MPolynomialRing_libsingular):
             save_data_basic(serializer, "MPolyRing", "name")
-            save_data_dict(lambda: save_data_basic(serializer, "QQField", "_type"),
-                           serializer, "params")
+            save_data_dict(
+                lambda: save_data_basic(serializer, "QQField", "_type"),
+                serializer, "params",
+            )
 
-        elif isinstance(obj,
-                        polynomial.multi_polynomial_libsingular.MPolynomial_libsingular):
+        elif isinstance(obj, MPolynomial_libsingular):
             ref = save_as_ref(serializer, obj.parent())
             save_data_basic(serializer, "MPolyRingElem", "name")
             save_data_basic(serializer, ref, "params")
 
+        elif isinstance(obj, MPolynomialIdeal):
+            ref = save_as_ref(serializer, obj.ring())
+            save_data_basic(serializer, "MPolyIdeal", "name")
+            save_data_basic(serializer, ref, "params")
+
         elif isinstance(obj, matrix_space.MatrixSpace):
             save_data_basic(serializer, "MatSpace", "name")
-            save_data_dict(lambda: save_data_basic(serializer, "QQField", "_type"),
-                           serializer, "params")
+            save_data_dict(
+                lambda: save_data_basic(serializer, "QQField", "_type"),
+                serializer, "params",
+            )
 
         elif isinstance(obj, matrix_rational_dense.Matrix_rational_dense):
             ref = save_as_ref(serializer, obj.parent())
@@ -200,39 +188,37 @@ def save_type_params(serializer, obj):
 
     save_data_dict(save_body, serializer, key="_type")
 
-
-def save_typed_object(serializer, obj, key=None):
-    def save_body():
-        save_type_params(serializer, obj)
-        save_object(serializer, obj, key="data")
-
-    if key is None:
-        save_body()
-    else:
-        save_data_dict(save_body, serializer, key)
+################################################################################
+# Object serializers
 
 def _rational_to_oscar_str(r):
     if r.denominator() == 1:
         return str(r.numerator())
     return f"{r.numerator()}//{r.denominator()}"
 
-def save_object(serializer, obj, key=None):
-    if isinstance(obj,
-                  polynomial.multi_polynomial_libsingular.MPolynomialRing_libsingular):
-        save_data_dict(lambda: save_data_json(serializer, obj.variable_names(), "symbols"), serializer, key)
+def _poly_to_data(p):
+    exponents = [list(map(str, e)) for e in p.exponents()]
+    coeffs = [_rational_to_oscar_str(c) for c in p.coefficients()]
+    return list(map(list, zip(exponents, coeffs)))
 
-    elif isinstance(obj,
-                    polynomial.multi_polynomial_libsingular.MPolynomial_libsingular):
-        exponents = [list(map(str, e)) for e in obj.exponents()]
-        coeffs = [s.replace("/", "//") for s in map(str, obj.coefficients())]
-        a = list(map(list, zip(exponents, coeffs)))
-        save_data_json(serializer, a, key)
+def save_object(serializer, obj, key=None):
+    if isinstance(obj, MPolynomialRing_libsingular):
+        save_data_dict(
+            lambda: save_data_json(serializer, list(obj.variable_names()), "symbols"),
+            serializer, key,
+        )
+
+    elif isinstance(obj, MPolynomial_libsingular):
+        save_data_json(serializer, _poly_to_data(obj), key)
+
+    elif isinstance(obj, MPolynomialIdeal):
+        save_data_json(serializer, [_poly_to_data(g) for g in obj.gens()], key)
 
     elif isinstance(obj, matrix_space.MatrixSpace):
-        def _save_mat_space():
+        def _save():
             save_data_basic(serializer, str(obj.nrows()), "nrows")
             save_data_basic(serializer, str(obj.ncols()), "ncols")
-        save_data_dict(_save_mat_space, serializer, key)
+        save_data_dict(_save, serializer, key)
 
     elif isinstance(obj, matrix_rational_dense.Matrix_rational_dense):
         rows = [
@@ -241,52 +227,32 @@ def save_object(serializer, obj, key=None):
         ]
         save_data_json(serializer, rows, key)
 
+################################################################################
+# Object deserializers
 
-def handle_refs(s):
-    if s.refs:
-        save_data_dict(lambda: [
-            save_typed_object(s,
-                              global_serializer_state.id_to_obj[r],
-                              key=str(r)) for r in s.refs
-        ], s, key="_refs")
-
-def load_type_params(s):
-    if isinstance(s.obj['_type'], str):
-        return {
-            'type_str': s.obj['_type'],
-            'params': None
-        }
-    else:
-        if isinstance(s.obj, str):
-            params = load_ref(s)
-        else:
-            obj = s.obj
-            s.obj = obj['_type']['params']
-            params = load_typed_object(s)
-            s.obj = obj
-            
-    return {
-        'type_str': s.obj['_type']['name'],
-        'params': params
-        }
+def _reconstruct_poly(ring, poly_data):
+    p = ring.zero()
+    for entry in poly_data:
+        exponent_ints = [int(e) for e in entry[0]]
+        monomial = ring.one()
+        for i, e in enumerate(exponent_ints):
+            if e != 0:
+                monomial *= ring.gens()[i] ** e
+        coeff = QQ(entry[1].replace("//", "/"))
+        p += coeff * monomial
+    return p
 
 def load_object(deserializer, type_str, params):
     if type_str == "MPolyRingElem":
-        p = QQ(0)
-        for entry in deserializer.obj["data"]:
-            exponent_ints = [int(i) for i in entry[0]]
-            monomial = QQ(1)
-            for i, e in enumerate(exponent_ints):
-                if e == 0:
-                    continue
-                monomial *= params.gens()[i] ** e
-            coeff = QQ(entry[1].replace("//", "/"))
-            p += coeff * monomial
-        return p
+        return _reconstruct_poly(params, deserializer.obj["data"])
 
     elif type_str == "MPolyRing":
-        var_names = deserializer.obj["data"]["symbols"]
-        return PolynomialRing(params, len(var_names), "".join(var_names))
+        var_names = list(deserializer.obj["data"]["symbols"])
+        return PolynomialRing(params, names=var_names)
+
+    elif type_str == "MPolyIdeal":
+        gens = [_reconstruct_poly(params, gd) for gd in deserializer.obj["data"]]
+        return params.ideal(gens)
 
     elif type_str == "MatSpace":
         nrows = int(deserializer.obj["data"]["nrows"])
@@ -302,62 +268,75 @@ def load_object(deserializer, type_str, params):
 
     elif type_str == "QQField":
         return QQ
-        
+
+################################################################################
+# Type dispatch
+
+def save_typed_object(serializer, obj, key=None):
+    def save_body():
+        save_type_params(serializer, obj)
+        save_object(serializer, obj, key="data")
+
+    if key is None:
+        save_body()
+    else:
+        save_data_dict(save_body, serializer, key)
+
+def handle_refs(s):
+    if s.refs:
+        save_data_dict(
+            lambda: [
+                save_typed_object(s, global_serializer_state.id_to_obj[r], key=str(r))
+                for r in s.refs
+            ],
+            s, key="_refs",
+        )
+
+def load_type_params(s):
+    if isinstance(s.obj["_type"], str):
+        return {"type_str": s.obj["_type"], "params": None}
+
+    obj = s.obj
+    s.obj = obj["_type"]["params"]
+    params = load_typed_object(s)
+    s.obj = obj
+    return {"type_str": obj["_type"]["name"], "params": params}
+
 def load_typed_object(s):
     if isinstance(s.obj, str):
         return load_ref(s)
-    
     type_params_dict = load_type_params(s)
-
     return load_object(s, **type_params_dict)
 
 ################################################################################
-# High-level save/load
+# High-level API
 
 def save(io, obj, with_attrs=True):
-    serializer = serializer_open(io, None, with_attrs)
+    serializer = serializer_open(io, with_attrs)
 
     def save_body():
-        # header
         save_data_json(serializer, get_oscar_serialization_version(), key="_ns")
-
-        # save type params
         save_typed_object(serializer, obj)
-
         handle_refs(serializer)
 
     save_data_dict(save_body, serializer)
 
 def save_file(filename: str, obj: Any, with_attrs=True):
-    tmp = tempfile.NamedTemporaryFile(delete=False, dir=os.path.dirname(filename) or ".")
-    with open(tmp.name, "w") as f:
-        save(f, obj, with_attrs=with_attrs)
-    shutil.move(tmp.name, filename)
-
+    tmp = tempfile.NamedTemporaryFile(
+        delete=False, dir=os.path.dirname(os.path.abspath(filename))
+    )
+    try:
+        with open(tmp.name, "w") as f:
+            save(f, obj, with_attrs=with_attrs)
+        shutil.move(tmp.name, filename)
+    except Exception:
+        os.unlink(tmp.name)
+        raise
 
 def load(io):
     deserializer = deserializer_open(io)
     return load_typed_object(deserializer)
-    
 
 def load_file(filename: str):
     with open(filename, "r") as f:
         return load(f)
-
-
-################################################################################
-# Example usage
-
-if __name__ == "__main__":
-    M = MatrixSpace(QQ, 2, 3)
-    m = M([[1, 2, 3], [4, 5, 6]])
-    print("original:", m)
-
-    save_file("m.mrdi", m)
-
-    reset_global_serializer_state()
-    m2 = load_file("m.mrdi")
-    print("loaded:  ", m2)
-    assert m == m2, "round-trip failed"
-    print("round-trip OK")
-    

@@ -1,0 +1,27 @@
+name: Tests
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: mamba-org/setup-micromamba@v2
+        with:
+          environment-name: sage-mrdi
+          create-args: >-
+            python=3.11
+            sage
+            pytest
+          channels: conda-forge
+          cache-environment: true
+          cache-environment-key: sage-mrdi-${{ runner.os }}
+
+      - name: Run tests
+        shell: micromamba-shell {0}
+        run: pytest tests/ -v
