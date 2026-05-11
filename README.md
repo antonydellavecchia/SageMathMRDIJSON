@@ -1,6 +1,6 @@
 # sage-mrdi-serialization
 
-Save and load Sage mathematical objects using the [MRDI](https://www.mrdi.eu/) file format (`.mrdi`), a JSON-based format designed for interoperability between computer algebra systems.
+Save and load Sage mathematical objects using the [MRDI](https://www.mardi4nfdi.de/about/mission) file format (`.mrdi`), a JSON-based format designed for interoperability between computer algebra systems.
 
 Files produced here are compatible with [Oscar.jl](https://github.com/oscar-system/Oscar.jl)'s serialization format (version 1.5).
 
