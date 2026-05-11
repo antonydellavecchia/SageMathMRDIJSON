@@ -52,6 +52,6 @@ class TestMatrixRoundtrip:
     def test_load_example_file(self):
         path = os.path.join(EXAMPLES_DIR, "matrix-example.mrdi")
         m = load_file(path)
-        expected = MatrixSpace(QQ, 2, 2)([[QQ(1) /2, QQ(3) / 4], [QQ(1), QQ(4) /, 5]])
+        expected = MatrixSpace(QQ, 2, 2)([[QQ(1) /2, QQ(3) / 4], [QQ(1), QQ(4) / 5]])
         assert m == expected
         assert m.parent() == MatrixSpace(QQ, 2, 2)
