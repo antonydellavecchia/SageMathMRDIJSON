@@ -12,7 +12,37 @@ import shutil
 from dataclasses import dataclass, field
 from typing import Any, Callable, Optional
 
-VERSION_NUMBER = (1, 5, 0)
+VERSION_NUMBER = (1, 9, 0)
+
+OSCAR_URL = "https://github.com/oscar-system/Oscar.jl"
+MRDI_URL = "https://www.mardi4nfdi.de/mrdi"
+MRDI_VERSION = "1.0.0"
+
+# Types shared between systems (Oscar.jl src/Serialization/mrdi.jl). They are
+# written without a namespace tag; every other type gets "_ns": "Oscar".
+MRDI_TYPES = {
+    "Boolean", "String", "Symbol", "Integers", "Integer", "Rationals",
+    "Rational", "HomogeneousList", "InhomogeneousList", "Set",
+    "FiniteField", "FiniteFieldElement", "PolynomialRing", "Polynomial",
+}
+
+# Names used by Oscar < 1.9 and by older versions of this package, accepted on load.
+OLD_NAMES = {
+    "Bool": "Boolean",
+    "ZZRing": "Integers",
+    "ZZRingElem": "Integer",
+    "QQField": "Rationals",
+    "QQFieldElem": "Rational",
+    "Vector": "HomogeneousList",
+    "Tuple": "InhomogeneousList",
+    "FqField": "FiniteField",
+    "fpField": "FiniteField",
+    "FqFieldElem": "FiniteFieldElement",
+    "fpFieldElem": "FiniteFieldElement",
+    "MPolyRing": "PolynomialRing",
+    "MPolyRingElem": "Polynomial",
+    "ZZModRing": "Nemo.ZZModRing",
+}
 
 ################################################################################
 # Global state
@@ -33,26 +63,35 @@ def reset_global_serializer_state():
 
 @dataclass
 class TypeHandler:
-    oscar_name: str
+    oscar_name: str           # for loading; saving uses name(obj) if given
     uses_id: bool
-    # (s, obj) → writes "params" field; None means no params (_type is plain string)
-    get_params: Optional[Callable]
+    # obj → the object written as "params" (a ref if its handler uses_id, else inline);
+    # None, or returning None, means no params
+    params: Optional[Callable]
     # (s, obj, key) → writes data under key; None means no data
     save_data: Optional[Callable]
     # (s, params) → Sage object
     load_fn: Callable
+    # value of "_instance" in _type, for names covering several Oscar types
+    instance: Optional[str] = None
+    # obj → name to write, for Sage types matching several Oscar names
+    name: Optional[Callable] = None
 
 _handlers: list = []          # [(python_type, TypeHandler)]
 _load_handlers: dict = {}     # oscar_name → TypeHandler
 
 def register(python_type, oscar_name, *,
              uses_id: bool = False,
-             get_params=None,
+             params=None,
              save_data=None,
-             load_fn=None):
-    handler = TypeHandler(oscar_name, uses_id, get_params, save_data, load_fn)
+             load_fn=None,
+             instance=None,
+             name=None,
+             also_loads=()):
+    handler = TypeHandler(oscar_name, uses_id, params, save_data, load_fn, instance, name)
     _handlers.append((python_type, handler))
-    _load_handlers[oscar_name] = handler
+    for n in (oscar_name, *also_loads):
+        _load_handlers[n] = handler
 
 def _find_handler(obj) -> Optional[TypeHandler]:
     """Find handler by isinstance check (MRO-aware via list order)."""
@@ -60,11 +99,13 @@ def _find_handler(obj) -> Optional[TypeHandler]:
     from sage.rings.finite_rings.finite_field_base import FiniteField
     from sage.rings.finite_rings.integer_mod_ring import IntegerModRing_generic
 
-    # IntegerMod_abstract is used for both GF(p) elements and ZZ/nZ elements;
-    # disambiguate by parent type.
+    # GF(p) is also an IntegerModRing, and IntegerMod_abstract is used for both
+    # GF(p) elements and ZZ/nZ elements; disambiguate by (parent) type.
+    if isinstance(obj, FiniteField):
+        return _load_handlers.get("FiniteField")
     if isinstance(obj, IntegerMod_abstract):
         if isinstance(obj.parent(), FiniteField):
-            return _load_handlers.get("fpFieldElem")
+            return _load_handlers.get("FiniteFieldElement")
         else:
             return _load_handlers.get("ZZModRingElem")
 
@@ -178,7 +219,8 @@ def load_ref(s):
 
 def get_oscar_serialization_version() -> dict:
     v = VERSION_NUMBER
-    return {"Oscar": ["https://github.com/oscar-system/Oscar.jl", f"{v[0]}.{v[1]}.{v[2]}"]}
+    return {"Oscar": [OSCAR_URL, f"{v[0]}.{v[1]}.{v[2]}"],
+            "mrdi": [MRDI_URL, MRDI_VERSION]}
 
 ################################################################################
 # Serialization dispatch
@@ -194,14 +236,33 @@ def _write_inline_typed_object(s, obj):
         handler.save_data(s, obj, "data")
 
 def _write_type_field(s, obj, handler: TypeHandler):
-    """Write the _type field for obj."""
-    if handler.get_params is None:
-        save_data_basic(s, handler.oscar_name, "_type")
+    """Write the _type field for obj: a bare name for mrdi types without
+    params, otherwise a dict with name, namespace tag, _instance and params."""
+    name = handler.name(obj) if handler.name else handler.oscar_name
+    params = handler.params(obj) if handler.params else None
+    if params is None and name in MRDI_TYPES and handler.instance is None:
+        save_data_basic(s, name, "_type")
+        return
+
+    def write_type():
+        save_data_basic(s, name, "name")
+        if name not in MRDI_TYPES:
+            save_data_basic(s, "Oscar", "_ns")
+        if handler.instance is not None:
+            save_data_basic(s, handler.instance, "_instance")
+        if params is not None:
+            _write_params(s, params)
+    save_data_dict(write_type, s, "_type")
+
+def _write_params(s, p):
+    """Params are a ref (UUID) if their type uses ids, as in Oscar, else inline."""
+    handler = _find_handler(p)
+    if handler is None:
+        raise TypeError(f"No MRDI handler registered for {type(p).__name__}")
+    if handler.uses_id:
+        save_data_basic(s, save_as_ref(s, p), "params")
     else:
-        def write_type():
-            save_data_basic(s, handler.oscar_name, "name")
-            handler.get_params(s, obj)
-        save_data_dict(write_type, s, "_type")
+        save_data_dict(lambda: _write_inline_typed_object(s, p), s, "params")
 
 def save_typed_object(s, obj, key=None):
     handler = _find_handler(obj)
@@ -221,8 +282,11 @@ def save_typed_object(s, obj, key=None):
 def handle_refs(s):
     if s.refs:
         def write_refs():
-            for r in list(s.refs):  # copy: save_typed_object may add more refs
+            i = 0
+            while i < len(s.refs):  # writing a ref may add more refs
+                r = s.refs[i]
                 save_typed_object(s, global_serializer_state.id_to_obj[r], key=str(r))
+                i += 1
         save_data_dict(write_refs, s, "_refs")
 
 ################################################################################
@@ -231,18 +295,19 @@ def handle_refs(s):
 def load_type_params(s) -> dict:
     type_field = s.obj.get("_type") if isinstance(s.obj, dict) else s.obj
     if isinstance(type_field, str):
-        return {"type_str": type_field, "params": None}
+        return {"type_str": OLD_NAMES.get(type_field, type_field), "params": None}
 
-    # type_field is a dict: {"name": "...", "params": ...}
+    # type_field is a dict: {"name": "...", "_ns"?: ..., "_instance"?: ..., "params"?: ...}
+    name = OLD_NAMES.get(type_field["name"], type_field["name"])
     obj = s.obj
     params_val = type_field.get("params")
     if params_val is None:
-        return {"type_str": type_field["name"], "params": None}
+        return {"type_str": name, "params": None}
 
     s.obj = params_val
     params = load_typed_object(s)
     s.obj = obj
-    return {"type_str": type_field["name"], "params": params}
+    return {"type_str": name, "params": params}
 
 def load_typed_object(s):
     if isinstance(s.obj, str):
@@ -255,21 +320,6 @@ def _load_dispatch(s, type_str: str, params):
     if handler is None:
         raise ValueError(f"No MRDI loader for Oscar type {type_str!r}")
     return handler.load_fn(s, params)
-
-################################################################################
-# Param helpers (used by type modules)
-
-def get_params_inline(s, ring_obj):
-    """Write params as inline typed object (for non-uses_id base rings)."""
-    def write():
-        _write_inline_typed_object(s, ring_obj)
-    save_data_dict(write, s, "params")
-
-def get_params_ref(s, parent_obj) -> str:
-    """Register parent as a ref and write UUID as params. Returns UUID string."""
-    ref = save_as_ref(s, parent_obj)
-    save_data_basic(s, ref, "params")
-    return ref
 
 ################################################################################
 # High-level API

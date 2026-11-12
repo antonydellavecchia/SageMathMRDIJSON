@@ -2,18 +2,18 @@
 Serializers for ring types.
 Mirrors Oscar.jl's Serialization/Rings.jl.
 
-Registered types:
-  ZZRing      ↔  sage IntegerRing_class       (ZZ)
-  QQField     ↔  sage RationalField            (QQ)
-  ZZModRing   ↔  sage IntegerModRing_generic
-  ZZModRingElem ↔ sage IntegerMod_abstract (non-GF parent)
-  PolyRing    ↔  sage PolynomialRing_field (univariate over QQ)
-  PolyRingElem ↔ sage Polynomial_rational_flint
-  MPolyRing   ↔  sage MPolynomialRing_libsingular
-  MPolyRingElem ↔ sage MPolynomial_libsingular
-  MPolyIdeal  ↔  sage MPolynomialIdeal
-  MatSpace    ↔  sage MatrixSpace
-  MatElem     ↔  sage Matrix_rational_dense
+Registered types (mrdi namespace unless marked Oscar):
+  Integers        ↔  sage IntegerRing_class       (ZZ)
+  Rationals       ↔  sage RationalField            (QQ)
+  Nemo.zzModRing / Nemo.ZZModRing  ↔  sage IntegerModRing_generic  (Oscar)
+  zzModRingElem / ZZModRingElem    ↔  sage IntegerMod_abstract (non-GF parent)  (Oscar)
+  PolyRing        ↔  sage PolynomialRing_field (univariate)         (Oscar)
+  PolyRingElem    ↔  sage Polynomial_rational_flint                 (Oscar)
+  PolynomialRing  ↔  sage MPolynomialRing_libsingular
+  Polynomial      ↔  sage MPolynomial_libsingular
+  MPolyIdeal      ↔  sage MPolynomialIdeal                          (Oscar)
+  MatSpace        ↔  sage MatrixSpace                               (Oscar)
+  MatElem         ↔  sage Matrix_rational_dense                     (Oscar)
 """
 
 from sage.all import QQ, ZZ, PolynomialRing, MatrixSpace
@@ -30,265 +30,169 @@ from sage.rings.finite_rings.integer_mod_ring import IntegerModRing_generic
 from sage.rings.finite_rings.integer_mod import IntegerMod_abstract
 from sage.matrix import matrix_space, matrix_rational_dense
 
-from mrdi.core import (
-    register, save_data_basic, save_data_json, save_data_dict,
-    get_params_inline, get_params_ref, _write_inline_typed_object,
-)
+from mrdi.core import register, save_data_basic, save_data_json, save_data_dict
+from mrdi.basic_types import rational_to_str, rational_from_json
 
 # ---------------------------------------------------------------------------
 # Helpers
 
-def _rational_to_oscar_str(r) -> str:
-    if r.denominator() == 1:
-        return str(r.numerator())
-    return f"{r.numerator()}//{r.denominator()}"
+def _mpoly_to_data(p) -> list:
+    """[[exponents, coeff_str], ...] for a multivariate poly over QQ."""
+    return [[[int(e) for e in exps], rational_to_str(c)]
+            for exps, c in zip(p.exponents(), p.coefficients())]
 
-def _poly_to_data(p) -> list:
-    """Encode a poly as [[exponent_strs, coeff_str], ...] (multivariate) or
-    [[exp_str, coeff_str], ...] (univariate)."""
-    if hasattr(p, 'exponents') and hasattr(p.parent(), 'ngens') and p.parent().ngens() > 1:
-        exponents = [list(map(str, e)) for e in p.exponents()]
-    else:
-        exponents = [str(e) for e in p.exponents()]
-    coeffs = [_rational_to_oscar_str(c) for c in p.coefficients()]
-    return list(map(list, zip(exponents, coeffs)))
+def _upoly_to_data(p) -> list:
+    """[[exponent, coeff_str], ...] for a univariate poly over QQ."""
+    return [[int(e), rational_to_str(c)]
+            for e, c in zip(p.exponents(), p.coefficients())]
 
-def _reconstruct_poly_multi(ring, data) -> object:
+def _reconstruct_poly_multi(ring, data):
+    gens = ring.gens()
     p = ring.zero()
-    for entry in data:
-        exp_ints = [int(e) for e in entry[0]]
+    for exps, c in data:
         mono = ring.one()
-        for i, e in enumerate(exp_ints):
-            if e:
-                mono *= ring.gens()[i] ** e
-        coeff = QQ(entry[1].replace("//", "/"))
-        p += coeff * mono
+        for g, e in zip(gens, exps):
+            mono *= g ** int(e)
+        p += rational_from_json(c) * mono
     return p
 
-def _reconstruct_poly_uni(ring, data) -> object:
-    p = ring.zero()
+def _reconstruct_poly_uni(ring, data):
     x = ring.gen()
-    for entry in data:
-        exp = int(entry[0])
-        coeff = QQ(entry[1].replace("//", "/"))
-        p += coeff * x ** exp
-    return p
+    return sum((rational_from_json(c) * x ** int(e) for e, c in data), ring.zero())
+
+def _symbols_data(s, names, key):
+    save_data_dict(lambda: save_data_json(s, list(names), "symbols"), s, key)
 
 # ---------------------------------------------------------------------------
-# ZZRing  (singleton)
+# Integers / Rationals  (singletons)
 
-def _load_zz_ring(s, params):
-    return ZZ
-
-register(
-    IntegerRing_class, "ZZRing",
-    load_fn=_load_zz_ring,
-)
+register(IntegerRing_class, "Integers", load_fn=lambda s, params: ZZ)
+register(RationalField, "Rationals", load_fn=lambda s, params: QQ)
 
 # ---------------------------------------------------------------------------
-# QQField  (singleton)
+# ZZModRing  (Integers(n)); Oscar names it by whether n fits in 64 bits
 
-def _load_qq_field(s, params):
-    return QQ
-
-register(
-    RationalField, "QQField",
-    load_fn=_load_qq_field,
-)
-
-# ---------------------------------------------------------------------------
-# ZZModRing  (Integers(n))
-
-def _save_zzmod_ring(s, obj, key):
-    save_data_basic(s, str(obj.order()), key)
+def _small_modulus(R) -> bool:
+    return R.order() < 2**64
 
 def _load_zzmod_ring(s, params):
     from sage.all import Integers
-    n = int(s.obj.get("data", s.obj))
-    return Integers(n)
+    return Integers(int(s.obj.get("data", s.obj)))
 
 register(
-    IntegerModRing_generic, "ZZModRing",
-    save_data=_save_zzmod_ring,
+    IntegerModRing_generic, "Nemo.zzModRing",
+    name=lambda R: "Nemo.zzModRing" if _small_modulus(R) else "Nemo.ZZModRing",
+    also_loads=("Nemo.ZZModRing",),
+    save_data=lambda s, obj, key: save_data_json(s, int(obj.order()), key),
     load_fn=_load_zzmod_ring,
 )
 
 # ---------------------------------------------------------------------------
 # ZZModRingElem  (element of Integers(n), not GF(p))
 
-def _save_zzmod_elem(s, obj, key):
-    save_data_basic(s, str(int(obj)), key)
-
-def _get_params_zzmod_elem(s, obj):
-    get_params_ref(s, obj.parent())
-
-def _load_zzmod_elem(s, params):
-    raw = s.obj.get("data", s.obj)
-    return params(int(raw))
-
 register(
     IntegerMod_abstract, "ZZModRingElem",
-    get_params=_get_params_zzmod_elem,
-    save_data=_save_zzmod_elem,
-    load_fn=_load_zzmod_elem,
+    name=lambda x: "zzModRingElem" if _small_modulus(x.parent()) else "ZZModRingElem",
+    also_loads=("zzModRingElem",),
+    params=lambda obj: obj.parent(),
+    save_data=lambda s, obj, key: save_data_basic(s, str(int(obj)), key),
+    load_fn=lambda s, params: params(int(s.obj.get("data", s.obj))),
 )
 
 # ---------------------------------------------------------------------------
 # PolyRing  (univariate polynomial ring, uses_id)
 
-def _get_params_poly_ring(s, obj):
-    get_params_inline(s, obj.base_ring())
-
-def _save_poly_ring(s, obj, key):
-    save_data_dict(
-        lambda: save_data_json(s, [str(obj.variable_name())], "symbols"),
-        s, key,
-    )
-
 def _load_poly_ring(s, params):
-    symbols = s.obj["data"]["symbols"]
-    return PolynomialRing(params, names=list(symbols))
+    return PolynomialRing(params, names=list(s.obj["data"]["symbols"]))
 
 register(
     PolynomialRing_field, "PolyRing",
     uses_id=True,
-    get_params=_get_params_poly_ring,
-    save_data=_save_poly_ring,
+    params=lambda obj: obj.base_ring(),
+    save_data=lambda s, obj, key: _symbols_data(s, [obj.variable_name()], key),
     load_fn=_load_poly_ring,
 )
 
 # ---------------------------------------------------------------------------
-# PolyRingElem  (univariate polynomial element)
-
-def _get_params_poly_elem(s, obj):
-    get_params_ref(s, obj.parent())
-
-def _save_poly_elem(s, obj, key):
-    data = [[str(e), _rational_to_oscar_str(c)]
-            for e, c in zip(obj.exponents(), obj.coefficients())]
-    save_data_json(s, data, key)
-
-def _load_poly_elem(s, params):
-    return _reconstruct_poly_uni(params, s.obj.get("data", s.obj))
+# PolyRingElem  (univariate polynomial element over QQ)
 
 register(
     Polynomial_rational_flint, "PolyRingElem",
-    get_params=_get_params_poly_elem,
-    save_data=_save_poly_elem,
-    load_fn=_load_poly_elem,
+    params=lambda obj: obj.parent(),
+    save_data=lambda s, obj, key: save_data_json(s, _upoly_to_data(obj), key),
+    load_fn=lambda s, params: _reconstruct_poly_uni(params, s.obj.get("data", s.obj)),
 )
 
 # ---------------------------------------------------------------------------
-# MPolyRing  (multivariate polynomial ring, uses_id)
-
-def _get_params_mpoly_ring(s, obj):
-    get_params_inline(s, obj.base_ring())
-
-def _save_mpoly_ring(s, obj, key):
-    save_data_dict(
-        lambda: save_data_json(s, list(obj.variable_names()), "symbols"),
-        s, key,
-    )
+# PolynomialRing  (multivariate polynomial ring, uses_id)
 
 def _load_mpoly_ring(s, params):
-    var_names = list(s.obj["data"]["symbols"])
-    return PolynomialRing(params, names=var_names)
+    return PolynomialRing(params, names=list(s.obj["data"]["symbols"]))
 
 register(
-    MPolynomialRing_libsingular, "MPolyRing",
+    MPolynomialRing_libsingular, "PolynomialRing",
     uses_id=True,
-    get_params=_get_params_mpoly_ring,
-    save_data=_save_mpoly_ring,
+    params=lambda obj: obj.base_ring(),
+    save_data=lambda s, obj, key: _symbols_data(s, obj.variable_names(), key),
     load_fn=_load_mpoly_ring,
 )
 
 # ---------------------------------------------------------------------------
-# MPolyRingElem
-
-def _get_params_mpoly_elem(s, obj):
-    get_params_ref(s, obj.parent())
-
-def _save_mpoly_elem(s, obj, key):
-    save_data_json(s, _poly_to_data(obj), key)
-
-def _load_mpoly_elem(s, params):
-    return _reconstruct_poly_multi(params, s.obj.get("data", s.obj))
+# Polynomial
 
 register(
-    MPolynomial_libsingular, "MPolyRingElem",
-    get_params=_get_params_mpoly_elem,
-    save_data=_save_mpoly_elem,
-    load_fn=_load_mpoly_elem,
+    MPolynomial_libsingular, "Polynomial",
+    params=lambda obj: obj.parent(),
+    save_data=lambda s, obj, key: save_data_json(s, _mpoly_to_data(obj), key),
+    load_fn=lambda s, params: _reconstruct_poly_multi(params, s.obj.get("data", s.obj)),
 )
 
 # ---------------------------------------------------------------------------
 # MPolyIdeal
 
-def _get_params_mpoly_ideal(s, obj):
-    get_params_ref(s, obj.ring())
-
-def _save_mpoly_ideal(s, obj, key):
-    save_data_json(s, [_poly_to_data(g) for g in obj.gens()], key)
-
 def _load_mpoly_ideal(s, params):
-    gens = [_reconstruct_poly_multi(params, gd) for gd in s.obj.get("data", s.obj)]
-    return params.ideal(gens)
+    return params.ideal([_reconstruct_poly_multi(params, g) for g in s.obj.get("data", s.obj)])
 
 register(
     MPolynomialIdeal, "MPolyIdeal",
-    get_params=_get_params_mpoly_ideal,
-    save_data=_save_mpoly_ideal,
+    params=lambda obj: obj.ring(),
+    save_data=lambda s, obj, key: save_data_json(s, [_mpoly_to_data(g) for g in obj.gens()], key),
     load_fn=_load_mpoly_ideal,
 )
 
 # ---------------------------------------------------------------------------
 # MatSpace  (uses_id)
 
-def _get_params_matspace(s, obj):
-    get_params_inline(s, obj.base_ring())
-
 def _save_matspace(s, obj, key):
     def _write():
-        save_data_basic(s, str(obj.nrows()), "nrows")
-        save_data_basic(s, str(obj.ncols()), "ncols")
+        save_data_json(s, int(obj.ncols()), "ncols")
+        save_data_json(s, int(obj.nrows()), "nrows")
     save_data_dict(_write, s, key)
 
 def _load_matspace(s, params):
-    nrows = int(s.obj["data"]["nrows"])
-    ncols = int(s.obj["data"]["ncols"])
-    return MatrixSpace(params, nrows, ncols)
+    data = s.obj["data"]
+    return MatrixSpace(params, int(data["nrows"]), int(data["ncols"]))
 
 register(
     matrix_space.MatrixSpace, "MatSpace",
     uses_id=True,
-    get_params=_get_params_matspace,
+    params=lambda obj: obj.base_ring(),
     save_data=_save_matspace,
     load_fn=_load_matspace,
 )
 
 # ---------------------------------------------------------------------------
-# MatElem
-
-def _get_params_mat_elem(s, obj):
-    get_params_ref(s, obj.parent())
+# MatElem  (over QQ)
 
 def _save_mat_elem(s, obj, key):
-    rows = [
-        [_rational_to_oscar_str(obj[i, j]) for j in range(obj.ncols())]
-        for i in range(obj.nrows())
-    ]
-    save_data_json(s, rows, key)
+    save_data_json(s, [[rational_to_str(c) for c in row] for row in obj.rows()], key)
 
 def _load_mat_elem(s, params):
-    rows = [
-        [QQ(cell.replace("//", "/")) for cell in row]
-        for row in s.obj.get("data", s.obj)
-    ]
-    return params(rows)
+    return params([[rational_from_json(c) for c in row] for row in s.obj.get("data", s.obj)])
 
 register(
     matrix_rational_dense.Matrix_rational_dense, "MatElem",
-    get_params=_get_params_mat_elem,
+    params=lambda obj: obj.parent(),
     save_data=_save_mat_elem,
     load_fn=_load_mat_elem,
 )

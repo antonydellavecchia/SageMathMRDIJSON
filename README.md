@@ -2,16 +2,16 @@
 
 Save and load Sage mathematical objects using the [MRDI](https://www.mardi4nfdi.de/about/mission) file format (`.mrdi`), a JSON-based format designed for interoperability between computer algebra systems.
 
-Files produced here are compatible with [Oscar.jl](https://github.com/oscar-system/Oscar.jl)'s serialization format (version 1.5).
+Files use the [mrdi](https://www.mardi4nfdi.de/mrdi) namespace 1.0.0 for shared types (integers, rationals, finite fields, multivariate polynomials) and the Oscar namespace for the rest, exactly as [Oscar.jl](https://github.com/oscar-system/Oscar.jl) 1.9 writes them. Older files (Oscar 1.5 format) still load.
 
 ## Supported types
 
-| Sage type | Oscar type |
+| Sage type | mrdi / Oscar type |
 |---|---|
 | `MatrixSpace(QQ, m, n)` | `MatSpace` |
 | `Matrix_rational_dense` | `MatElem` |
-| `MPolynomialRing_libsingular` (over QQ) | `MPolyRing` |
-| `MPolynomial_libsingular` | `MPolyRingElem` |
+| `MPolynomialRing_libsingular` (over QQ) | `PolynomialRing` (mrdi) |
+| `MPolynomial_libsingular` | `Polynomial` (mrdi) |
 | `MPolynomialIdeal` | `MPolyIdeal` |
 
 ## Usage

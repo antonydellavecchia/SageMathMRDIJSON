@@ -3,187 +3,129 @@ Serializers for field types.
 Mirrors Oscar.jl's Serialization/Fields.jl.
 
 Registered types:
-  fpField / FpField  ↔  sage FiniteField_prime_modn (alias "FiniteField")
-  fpFieldElem        ↔  sage IntegerMod_abstract with FiniteField parent
-  FqField            ↔  sage FiniteField_givaro / FiniteField_ntl_gf2e
-                          (alias "FiniteField")
-  FqFieldElem        ↔  sage FiniteField_givaroElement etc.
-  AbsSimpleNumField  ↔  sage NumberField (absolute, simple)
-  AbsSimpleNumFieldElem ↔ sage NumberFieldElement
+  FiniteField           ↔  sage finite fields, GF(p) and GF(p^n)   (mrdi, uses_id)
+  FiniteFieldElement    ↔  sage finite field elements              (mrdi)
+  AbsSimpleNumField     ↔  sage NumberField (absolute, simple)     (Oscar, uses_id)
+  AbsSimpleNumFieldElem ↔  sage NumberFieldElement                 (Oscar)
+
+Like Oscar, GF(p) is written with data p and no params; GF(p^n) with params a
+univariate polynomial ring over GF(p) and data its defining polynomial as
+[[exponent, coefficient], ...].
 """
 
-from sage.all import QQ, ZZ, GF, NumberField, PolynomialRing
-from sage.rings.finite_rings.finite_field_prime_modn import FiniteField_prime_modn
-from sage.rings.finite_rings.finite_field_givaro import FiniteField_givaro
+from sage.all import QQ, GF, NumberField, PolynomialRing
 from sage.rings.finite_rings.finite_field_base import FiniteField
-from sage.rings.finite_rings.integer_mod import IntegerMod_abstract
+from sage.rings.finite_rings.element_givaro import FiniteField_givaroElement
 from sage.rings.number_field.number_field_base import NumberField as NumberFieldBase
 from sage.rings.number_field.number_field_element import NumberFieldElement
 
-from mrdi.core import (
-    register, save_data_basic, save_data_json, save_data_dict,
-    get_params_inline, get_params_ref,
-)
-from mrdi.rings import _rational_to_oscar_str, _reconstruct_poly_uni
+from mrdi.core import register, save_data_basic, save_data_json, save_data_dict
+from mrdi.basic_types import rational_from_json
+from mrdi.rings import _upoly_to_data, _reconstruct_poly_uni
+
+def _int_poly_data(p) -> list:
+    """[[exponent, coefficient], ...] for a poly over GF(p), as integers."""
+    return [[int(e), int(c)] for e, c in zip(p.exponents(), p.coefficients())]
 
 # ---------------------------------------------------------------------------
-# Helper: poly data for elements over QQ used as def_pol
+# FiniteField  (uses_id)
 
-def _uni_poly_to_data(p) -> list:
-    return [[str(e), _rational_to_oscar_str(c)]
-            for e, c in zip(p.exponents(), p.coefficients())]
+def _fq_params(F):
+    return None if F.degree() == 1 else F.modulus().parent()
 
-# ---------------------------------------------------------------------------
-# fpField / FpField  (GF(p) for prime p, alias "FiniteField")
-
-def _save_fp_field(s, obj, key):
-    save_data_basic(s, str(obj.characteristic()), key)
-
-def _load_fp_field(s, params):
-    p = int(s.obj.get("data", s.obj))
-    return GF(p)
-
-register(
-    FiniteField_prime_modn, "FiniteField",
-    save_data=_save_fp_field,
-    load_fn=_load_fp_field,
-)
-
-# ---------------------------------------------------------------------------
-# fpFieldElem  (element of GF(p))
-# NOTE: IntegerMod_abstract is also used by ZZModRingElem; core._find_handler
-# disambiguates by checking parent type.
-
-def _get_params_fp_elem(s, obj):
-    get_params_ref(s, obj.parent())
-
-def _save_fp_elem(s, obj, key):
-    save_data_basic(s, str(int(obj)), key)
-
-def _load_fp_elem(s, params):
-    raw = s.obj.get("data", s.obj)
-    return params(int(raw))
-
-# Registered under "fpFieldElem" so _find_handler (which special-cases
-# IntegerMod_abstract + FiniteField parent) can find it.
-from mrdi.core import _load_handlers, TypeHandler
-
-_fp_field_elem_handler = TypeHandler(
-    oscar_name="fpFieldElem",
-    uses_id=False,
-    get_params=_get_params_fp_elem,
-    save_data=_save_fp_elem,
-    load_fn=_load_fp_elem,
-)
-_load_handlers["fpFieldElem"] = _fp_field_elem_handler
-
-# ---------------------------------------------------------------------------
-# FqField  (GF(p^n) for n > 1, alias "FiniteField")
-# Disambiguate from fpField on load by checking order vs characteristic.
-
-def _get_params_fq_field(s, obj):
-    get_params_inline(s, GF(obj.characteristic()))
-
-def _save_fq_field(s, obj, key):
-    # Save the defining polynomial for the extension
-    modulus = obj.modulus()  # poly over GF(p)
-    # convert coefficients to integers for portability
-    data = {"degree": str(obj.degree()),
-            "def_pol": [[str(e), str(int(c))]
-                        for e, c in zip(modulus.exponents(),
-                                        modulus.coefficients())]}
-    save_data_json(s, data, key)
+def _save_fq_field(s, F, key):
+    if F.degree() == 1:
+        save_data_json(s, int(F.characteristic()), key)
+    else:
+        save_data_json(s, _int_poly_data(F.modulus()), key)
 
 def _load_fq_field(s, params):
-    # params is GF(p) (the base prime field)
     data = s.obj.get("data", s.obj)
-    if isinstance(data, str):
-        # Simple prime field stored as characteristic (shouldn't reach here)
+    if params is None:                       # GF(p)
         return GF(int(data))
-    p = params.characteristic()
-    n = int(data["degree"])
-    if n == 1:
-        return GF(p)
-    Fp = GF(p)
-    Fpx = PolynomialRing(Fp, 'x')
-    x = Fpx.gen()
-    def_pol = Fpx.zero()
-    for entry in data["def_pol"]:
-        exp = int(entry[0])
-        coeff = Fp(int(entry[1]))
-        def_pol += coeff * x ** exp
-    return GF(p**n, name='z', modulus=def_pol)
+    if isinstance(data, dict):               # older files of this package
+        Fp = params
+        Fpx = PolynomialRing(Fp, "x")
+        modulus = sum((Fp(int(c)) * Fpx.gen() ** int(e) for e, c in data["def_pol"]), Fpx.zero())
+    else:                                    # params: polynomial ring over GF(p)
+        Fpx = params
+        modulus = sum((int(c) * Fpx.gen() ** int(e) for e, c in data), Fpx.zero())
+    p = modulus.base_ring().characteristic()
+    return GF(p ** modulus.degree(), name="z", modulus=modulus)
 
 register(
-    FiniteField_givaro, "FqField",
-    get_params=_get_params_fq_field,
+    FiniteField, "FiniteField",
+    uses_id=True,
+    instance="FqField",
+    params=_fq_params,
     save_data=_save_fq_field,
     load_fn=_load_fq_field,
 )
 
-# Also register the element type for FqField
-from sage.rings.finite_rings.element_givaro import FiniteField_givaroElement
+# ---------------------------------------------------------------------------
+# FiniteFieldElement
+# GF(p) elements are IntegerMod_abstract; core._find_handler routes them here.
 
-def _get_params_fq_elem(s, obj):
-    get_params_ref(s, obj.parent())
+def _save_fq_elem(s, x, key):
+    if x.parent().degree() == 1:
+        save_data_json(s, int(x), key)
+    else:
+        save_data_json(s, _int_poly_data(x.polynomial()), key)
 
-def _save_fq_elem(s, obj, key):
-    save_data_basic(s, str(obj.to_integer()), key)
-
-def _load_fq_elem(s, params):
-    raw = s.obj.get("data", s.obj)
-    return params.from_integer(int(raw))
+def _load_fq_elem(s, F):
+    data = s.obj.get("data", s.obj)
+    if isinstance(data, list):
+        z = F.gen()
+        return sum((int(c) * z ** int(e) for e, c in data), F.zero())
+    if F.degree() == 1:
+        return F(int(data))
+    return F.from_integer(int(data))         # older files of this package
 
 register(
-    FiniteField_givaroElement, "FqFieldElem",
-    get_params=_get_params_fq_elem,
+    FiniteField_givaroElement, "FiniteFieldElement",
+    params=lambda x: x.parent(),
     save_data=_save_fq_elem,
     load_fn=_load_fq_elem,
 )
 
 # ---------------------------------------------------------------------------
-# AbsSimpleNumField  (absolute simple number field, uses_id)
+# AbsSimpleNumField  (uses_id)
 
-def _save_num_field(s, obj, key):
+def _save_num_field(s, K, key):
     def _write():
-        def_pol_data = _uni_poly_to_data(obj.defining_polynomial())
-        save_data_json(s, def_pol_data, "def_pol")
-        save_data_basic(s, obj.variable_name(), "var")
+        save_data_json(s, _upoly_to_data(K.defining_polynomial()), "def_pol")
+        save_data_basic(s, K.variable_name(), "var")
     save_data_dict(_write, s, key)
 
 def _load_num_field(s, params):
     data = s.obj["data"]
-    Rx = PolynomialRing(QQ, "x")
-    def_pol = _reconstruct_poly_uni(Rx, data["def_pol"])
-    return NumberField(def_pol, data["var"])
+    Rx = params if params is not None else PolynomialRing(QQ, "x")
+    return NumberField(_reconstruct_poly_uni(Rx, data["def_pol"]), data["var"])
 
 register(
     NumberFieldBase, "AbsSimpleNumField",
     uses_id=True,
+    params=lambda K: K.defining_polynomial().parent(),
     save_data=_save_num_field,
     load_fn=_load_num_field,
 )
 
 # ---------------------------------------------------------------------------
-# AbsSimpleNumFieldElem
+# AbsSimpleNumFieldElem: [[power of generator, coeff_str], ...]
 
-def _get_params_nf_elem(s, obj):
-    get_params_ref(s, obj.parent())
+def _save_nf_elem(s, x, key):
+    save_data_json(s, _upoly_to_data(x.polynomial()), key)
 
-def _save_nf_elem(s, obj, key):
-    # Store as list of QQ coefficients (constant term first)
-    coeffs = [_rational_to_oscar_str(c) for c in obj.list()]
-    save_data_json(s, coeffs, key)
-
-def _load_nf_elem(s, params):
-    K = params
-    coeffs_raw = s.obj.get("data", s.obj)
-    coeffs = [QQ(c.replace("//", "/")) for c in coeffs_raw]
-    return K(coeffs)
+def _load_nf_elem(s, K):
+    data = s.obj.get("data", s.obj)
+    if data and not isinstance(data[0], list):   # older files: dense coefficient list
+        return K([rational_from_json(c) for c in data])
+    a = K.gen()
+    return sum((rational_from_json(c) * a ** int(e) for e, c in data), K.zero())
 
 register(
     NumberFieldElement, "AbsSimpleNumFieldElem",
-    get_params=_get_params_nf_elem,
+    params=lambda x: x.parent(),
     save_data=_save_nf_elem,
     load_fn=_load_nf_elem,
 )

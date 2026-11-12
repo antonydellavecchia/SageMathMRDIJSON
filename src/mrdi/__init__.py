@@ -1,7 +1,7 @@
 """
 sage-mrdi: MRDI serialization for Sage mathematical objects.
 
-Oscar-compatible .mrdi format (version 1.5).
+mrdi namespace 1.0.0 / Oscar 1.9 compatible .mrdi format.
 """
 
 # Import type modules to trigger handler registration
